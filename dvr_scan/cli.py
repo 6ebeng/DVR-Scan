@@ -18,6 +18,7 @@ from dvr_scan.region import RegionValidator
 from dvr_scan.shared import logfile_path
 from dvr_scan.shared.cli import (
     VERSION_STRING,
+    CudaInfoAction,
     LicenseAction,
     VersionAction,
     float_type_check,
@@ -120,6 +121,12 @@ def get_cli_parser(user_config: ConfigRegistry):
         "--license",
         action=LicenseAction,
         version=get_license_info(),
+    )
+
+    parser.add_argument(
+        "--cuda-info",
+        action=CudaInfoAction,
+        help="Show CUDA/GPU diagnostics and setup information for hardware acceleration.",
     )
 
     parser.add_argument(

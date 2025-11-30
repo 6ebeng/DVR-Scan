@@ -75,6 +75,41 @@ class LicenseAction(argparse.Action):
         parser.exit(message=version)
 
 
+class CudaInfoAction(argparse.Action):
+    """argparse Action for displaying CUDA diagnostics and setup information."""
+
+    def __init__(
+        self,
+        option_strings,
+        dest=argparse.SUPPRESS,
+        default=argparse.SUPPRESS,
+        help="show CUDA/GPU diagnostics and setup information",
+    ):
+        super(CudaInfoAction, self).__init__(
+            option_strings=option_strings,
+            dest=dest,
+            default=default,
+            nargs=0,
+            help=help,
+        )
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        try:
+            from dvr_scan.cuda_setup import print_cuda_diagnostics
+            print_cuda_diagnostics()
+        except ImportError:
+            # Fallback if cuda_setup module is not available
+            from dvr_scan.platform import HAS_MOG2_CUDA, get_system_version_info
+            print(get_system_version_info())
+            print(f"\nMOG2_CUDA Available: {HAS_MOG2_CUDA}")
+            if not HAS_MOG2_CUDA:
+                print("\nTo enable CUDA support:")
+                print("1. Install CUDA Toolkit from https://developer.nvidia.com/cuda-downloads")
+                print("2. Install OpenCV with CUDA support")
+                print("   See: https://github.com/cudawarped/opencv-python-cuda-wheels/releases")
+        parser.exit()
+
+
 def timecode_type_check(metavar: ty.Optional[str] = None):
     """Creates an argparse type for a user-inputted timecode.
 
