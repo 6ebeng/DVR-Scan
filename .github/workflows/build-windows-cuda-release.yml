@@ -1,0 +1,423 @@
+# Build Windows MSI Installer with CUDA Support for DVR-Scan
+# 
+# This workflow builds DVR-Scan with CUDA-enabled OpenCV for GPU acceleration.
+# It creates both a portable ZIP and an MSI installer.
+#
+# Requirements:
+# - Pre-built OpenCV CUDA wheel (downloaded from cudawarped/opencv-python-cuda-wheels)
+# - CUDA runtime DLLs bundled with the distribution
+# - Advanced Installer for MSI creation (requires license)
+
+name: Windows CUDA Distribution
+
+on:
+  push:
+    tags:
+      - v*-release
+      - v*-cuda
+  workflow_dispatch:
+    inputs:
+      opencv_cuda_version:
+        description: 'OpenCV CUDA wheel version (e.g., 4.10.0.84)'
+        required: false
+        default: '4.10.0.84'
+      cuda_version:
+        description: 'CUDA version for runtime (e.g., 12.4)'
+        required: false
+        default: '12.4'
+      create_release:
+        description: 'Create GitHub Release'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  PYTHON_VERSION: "3.12"
+  FFMPEG_VERSION: "8.0"
+  CUDA_VERSION: ${{ github.event.inputs.cuda_version || '12.4' }}
+  # OpenCV CUDA wheel from https://github.com/cudawarped/opencv-python-cuda-wheels
+  OPENCV_CUDA_WHEEL_URL: "https://github.com/cudawarped/opencv-python-cuda-wheels/releases/download/4.10.0.84/opencv_contrib_python_cuda-4.10.0.84-cp312-cp312-win_amd64.whl"
+  UV_SYSTEM_PYTHON: 1
+  UV_LINK_MODE: "symlink"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: 📦 Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.5.11"
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 🔧 Cache CUDA Toolkit
+        id: cache-cuda
+        uses: actions/cache@v4
+        with:
+          path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v${{ env.CUDA_VERSION }}
+          key: cuda-toolkit-${{ env.CUDA_VERSION }}-windows
+
+      - name: 🔧 Install CUDA Toolkit
+        if: steps.cache-cuda.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $CUDA_VERSION = "${{ env.CUDA_VERSION }}"
+          $CUDA_VERSION_NODOT = $CUDA_VERSION.Replace(".", "")
+          
+          # Map CUDA version to download URL
+          $cuda_urls = @{
+            "12.4" = "https://developer.download.nvidia.com/compute/cuda/12.4.0/network_installers/cuda_12.4.0_windows_network.exe"
+            "12.3" = "https://developer.download.nvidia.com/compute/cuda/12.3.0/network_installers/cuda_12.3.0_windows_network.exe"
+            "12.0" = "https://developer.download.nvidia.com/compute/cuda/12.0.0/network_installers/cuda_12.0.0_windows_network.exe"
+            "11.8" = "https://developer.download.nvidia.com/compute/cuda/11.8.0/network_installers/cuda_11.8.0_windows_network.exe"
+          }
+          
+          $cuda_url = $cuda_urls[$CUDA_VERSION]
+          if (-not $cuda_url) {
+            Write-Error "Unsupported CUDA version: $CUDA_VERSION"
+            exit 1
+          }
+          
+          Write-Host "Downloading CUDA Toolkit $CUDA_VERSION..."
+          $installer = "$env:TEMP\cuda_installer.exe"
+          curl -L -o $installer $cuda_url
+          
+          Write-Host "Installing CUDA Toolkit (runtime components only)..."
+          # Install only the components needed for runtime
+          $components = "cudart_$CUDA_VERSION nvcc_$CUDA_VERSION cublas_$CUDA_VERSION cufft_$CUDA_VERSION curand_$CUDA_VERSION cusparse_$CUDA_VERSION npp_$CUDA_VERSION"
+          Start-Process -FilePath $installer -ArgumentList "-s $components" -Wait -NoNewWindow
+          
+          Write-Host "CUDA Toolkit installation complete."
+
+      - name: 🔧 Set CUDA Environment
+        shell: pwsh
+        run: |
+          $CUDA_PATH = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v${{ env.CUDA_VERSION }}"
+          echo "CUDA_PATH=$CUDA_PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "$CUDA_PATH\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: 📦 Download OpenCV CUDA Wheel
+        shell: pwsh
+        run: |
+          Write-Host "Downloading OpenCV CUDA wheel..."
+          New-Item -Path ".cache" -ItemType Directory -Force
+          curl -L -o ".cache/opencv_cuda.whl" "${{ env.OPENCV_CUDA_WHEEL_URL }}"
+          Write-Host "OpenCV CUDA wheel downloaded."
+
+      - name: 📦 Install Dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip build wheel virtualenv setuptools
+          
+          # Install OpenCV CUDA wheel first (replaces standard opencv)
+          pip install .cache/opencv_cuda.whl
+          
+          # Install other requirements (skip opencv packages as we use CUDA version)
+          pip install numpy pillow platformdirs pyinstaller pytest scenedetect screeninfo tqdm
+          
+          # Install documentation requirements
+          pip install -r docs/requirements.txt
+
+      - name: 🧪 Verify CUDA Setup
+        shell: pwsh
+        run: |
+          python -c @"
+          import cv2
+          print(f'OpenCV Version: {cv2.__version__}')
+          if hasattr(cv2, 'cuda'):
+              count = cv2.cuda.getCudaEnabledDeviceCount()
+              print(f'CUDA enabled in OpenCV: Yes')
+              print(f'Note: No GPU available in CI, but CUDA module is compiled in')
+          else:
+              print('CUDA enabled in OpenCV: No')
+              exit(1)
+          "@
+          
+          # Verify DVR-Scan CUDA detection
+          python -c "from dvr_scan.subtractor import SubtractorCudaMOG2; print('SubtractorCudaMOG2 available:', SubtractorCudaMOG2.is_available())"
+
+      - name: 📥 Download FFMPEG
+        uses: dsaltares/fetch-gh-release-asset@1.1.2
+        with:
+          repo: 'GyanD/codexffmpeg'
+          version: 'tags/${{ env.FFMPEG_VERSION }}'
+          file: 'ffmpeg-${{ env.FFMPEG_VERSION }}-full_build.7z'
+
+      - name: 🧪 Run Unit Tests
+        shell: pwsh
+        run: |
+          7z e ffmpeg-${{ env.FFMPEG_VERSION }}-full_build.7z ffmpeg.exe -r
+          python -m pytest tests/ -v --ignore=tests/test_scan_context.py
+          # Skip CUDA-specific tests as no GPU in CI
+
+      - name: 🛠️ Build DVR-Scan
+        shell: pwsh
+        run: |
+          python dist/pre_release.py --use-local-images
+          # Use CUDA-specific spec file that includes CUDA DLLs
+          pyinstaller dist/dvr-scan-cuda.spec
+          python dist/post_release.py
+
+      - name: 📦 Verify CUDA DLLs in Distribution
+        shell: pwsh
+        run: |
+          $DIST_PATH = "dist/dvr-scan"
+          
+          Write-Host "Verifying CUDA DLLs in distribution..."
+          
+          # Check for CUDA DLLs that should have been bundled by PyInstaller
+          $cuda_dlls = Get-ChildItem -Path $DIST_PATH -Filter "cuda*.dll" -ErrorAction SilentlyContinue
+          $npp_dlls = Get-ChildItem -Path $DIST_PATH -Filter "npp*.dll" -ErrorAction SilentlyContinue
+          $cublas_dlls = Get-ChildItem -Path $DIST_PATH -Filter "cublas*.dll" -ErrorAction SilentlyContinue
+          
+          $total = ($cuda_dlls.Count + $npp_dlls.Count + $cublas_dlls.Count)
+          
+          if ($total -eq 0) {
+            Write-Host "No CUDA DLLs found - copying from CUDA installation..."
+            $CUDA_PATH = $env:CUDA_PATH
+            
+            if (-not $CUDA_PATH) {
+              Write-Error "CUDA_PATH not set!"
+              exit 1
+            }
+            
+            # Essential CUDA runtime DLLs
+            $patterns = @(
+              "cudart64_*.dll",
+              "cublas64_*.dll",
+              "cublasLt64_*.dll",
+              "cufft64_*.dll",
+              "curand64_*.dll",
+              "cusparse64_*.dll",
+              "cusolver64_*.dll",
+              "nppc64_*.dll",
+              "nppial64_*.dll",
+              "nppicc64_*.dll",
+              "nppidei64_*.dll",
+              "nppif64_*.dll",
+              "nppig64_*.dll",
+              "nppim64_*.dll",
+              "nppist64_*.dll",
+              "nppisu64_*.dll",
+              "nppitc64_*.dll"
+            )
+            
+            foreach ($pattern in $patterns) {
+              $files = Get-ChildItem -Path "$CUDA_PATH\bin" -Filter $pattern -ErrorAction SilentlyContinue
+              foreach ($file in $files) {
+                Write-Host "  Copying $($file.Name)..."
+                Copy-Item $file.FullName -Destination $DIST_PATH
+              }
+            }
+          } else {
+            Write-Host "Found $total CUDA DLLs in distribution."
+          }
+          
+          # Final check
+          $final_cuda_dlls = Get-ChildItem -Path $DIST_PATH -Filter "cuda*.dll" -ErrorAction SilentlyContinue
+          Write-Host "CUDA DLLs in distribution: $($final_cuda_dlls.Count)"
+
+      - name: 📦 Assemble Distribution
+        shell: pwsh
+        run: |
+          # Extract and copy FFMPEG
+          7z e -odist/ffmpeg ffmpeg-${{ env.FFMPEG_VERSION }}-full_build.7z LICENSE -r
+          Move-Item -Path ffmpeg.exe -Destination dist/dvr-scan/ffmpeg.exe
+          Move-Item -Path dist/ffmpeg/LICENSE -Destination dist/dvr-scan/LICENSE-FFMPEG -Force
+          
+          # Create CUDA readme
+          @"
+          DVR-Scan CUDA Edition
+          =====================
+          
+          This build includes NVIDIA CUDA support for GPU-accelerated motion detection.
+          
+          Requirements:
+          - NVIDIA GPU with CUDA Compute Capability 6.0 or higher
+          - NVIDIA Driver version 450.80.02 or higher (for CUDA ${{ env.CUDA_VERSION }})
+          
+          Usage:
+          - Command line: dvr-scan -i video.mp4 -b MOG2_CUDA
+          - GUI: Settings -> Motion -> Subtractor -> MOG2_CUDA
+          
+          If you encounter DLL errors, ensure your NVIDIA drivers are up to date.
+          
+          For more information, see: https://www.dvr-scan.com/docs
+          "@ | Out-File -FilePath "dist/dvr-scan/README-CUDA.txt" -Encoding UTF8
+
+      - name: 🧪 Test Distribution
+        shell: pwsh
+        run: |
+          Write-Host "Testing built distribution..."
+          ./dist/dvr-scan/dvr-scan.exe --version
+          ./dist/dvr-scan/dvr-scan.exe --license
+          ./dist/dvr-scan/dvr-scan.exe --cuda-info
+          ./dist/dvr-scan/dvr-scan.exe -i tests/resources/simple_movement.mp4 -so -et 5s -df 3
+
+      - name: 📦 Create Portable ZIP
+        shell: pwsh
+        run: |
+          cd dist/dvr-scan
+          7z a ../dvr-scan-cuda-win64.zip *
+          cd ../..
+
+      - name: 📤 Upload Portable Distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: DVR-Scan-CUDA-win64_portable
+          path: dist/dvr-scan
+
+      - name: 📤 Upload Portable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: DVR-Scan-CUDA-win64_zip
+          path: dist/dvr-scan-cuda-win64.zip
+
+  build-msi:
+    runs-on: windows-latest
+    needs: build
+    
+    # Only build MSI for releases or when explicitly requested
+    if: github.event_name == 'push' || github.event.inputs.create_release == 'true'
+    
+    env:
+      # Encrypted AdvancedInstaller License (same as appveyor.yml)
+      # Note: You need to add these as GitHub secrets
+      AI_LICENSE_SECRET: ${{ secrets.AI_LICENSE_SECRET }}
+      AI_LICENSE_SALT: ${{ secrets.AI_LICENSE_SALT }}
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📥 Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: DVR-Scan-CUDA-win64_portable
+          path: dist/dvr-scan
+
+      - name: 🔧 Install Advanced Installer
+        shell: pwsh
+        run: |
+          Write-Host "Downloading Advanced Installer..."
+          curl -L -o advinst.msi "https://www.advancedinstaller.com/downloads/advinst.msi"
+          
+          Write-Host "Installing Advanced Installer..."
+          msiexec /i advinst.msi /qn
+          
+          # Add to PATH
+          $AI_PATH = "C:\Program Files (x86)\Caphyon\Advanced Installer 23.0\bin\x86"
+          echo $AI_PATH | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: 🔑 Register Advanced Installer License
+        shell: pwsh
+        run: |
+          cd dist/installer
+          
+          # Decrypt license file (requires secure-file tool)
+          # Note: You need to set up the encrypted license file
+          if (Test-Path "license65.dat.enc") {
+            Write-Host "Decrypting license file..."
+            # Install secure-file
+            iex ((New-Object Net.WebClient).DownloadString('https://raw.githubusercontent.com/appveyor/secure-file/master/install.ps1'))
+            
+            if ($env:AI_LICENSE_SECRET -and $env:AI_LICENSE_SALT) {
+              .\appveyor-tools\secure-file.exe -decrypt license65.dat.enc -secret $env:AI_LICENSE_SECRET -salt $env:AI_LICENSE_SALT
+              AdvancedInstaller.com /RegisterOffline "$PWD\license65.dat"
+            } else {
+              Write-Warning "License secrets not configured. Skipping registration."
+            }
+          }
+          
+          cd ../..
+
+      - name: 🔧 Update AIP for CUDA Build
+        shell: pwsh
+        run: |
+          # Modify the AIP file to indicate CUDA version
+          $aipPath = "dist/installer/DVR-Scan.aip"
+          $content = Get-Content $aipPath -Raw
+          
+          # Update product name to include CUDA
+          $content = $content -replace 'DVR-Scan</Value>', 'DVR-Scan (CUDA)</Value>'
+          
+          Set-Content -Path $aipPath -Value $content
+
+      - name: 🛠️ Build MSI Installer
+        shell: pwsh
+        run: |
+          cd dist/installer
+          AdvancedInstaller.com /build DVR-Scan.aip
+          cd ../..
+          
+          # Rename MSI to indicate CUDA version
+          $msiFile = Get-ChildItem -Path "dist/installer" -Filter "DVR-Scan-*.msi" | Select-Object -First 1
+          if ($msiFile) {
+            $newName = $msiFile.Name -replace '\.msi$', '-cuda.msi'
+            Rename-Item -Path $msiFile.FullName -NewName $newName
+          }
+
+      - name: 📤 Upload MSI Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: DVR-Scan-CUDA-win64_msi
+          path: dist/installer/DVR-Scan-*-cuda.msi
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build, build-msi]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == 'true'
+    
+    permissions:
+      contents: write
+    
+    steps:
+      - name: 📥 Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 📋 List Artifacts
+        run: |
+          find artifacts -type f -name "*"
+
+      - name: 🚀 Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: "DVR-Scan ${{ github.ref_name }} (CUDA)"
+          body: |
+            ## DVR-Scan CUDA Release
+            
+            This release includes NVIDIA CUDA support for GPU-accelerated motion detection.
+            
+            ### Requirements
+            - NVIDIA GPU with CUDA Compute Capability 6.0+
+            - NVIDIA Driver 450.80+ 
+            
+            ### Downloads
+            - **MSI Installer** (Recommended): `DVR-Scan-*-cuda.msi`
+            - **Portable ZIP**: `dvr-scan-cuda-win64.zip`
+            
+            ### Usage
+            ```
+            dvr-scan -i video.mp4 -b MOG2_CUDA
+            ```
+            
+            See [CUDA Setup Guide](https://www.dvr-scan.com/docs/cuda-setup) for more information.
+          files: |
+            artifacts/DVR-Scan-CUDA-win64_zip/*.zip
+            artifacts/DVR-Scan-CUDA-win64_msi/*.msi
+          draft: true
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

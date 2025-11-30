@@ -1,0 +1,21 @@
+#
+# DVR-Scan Requirements for Windows CUDA Build
+#
+# This file uses OpenCV with CUDA support from cudawarped's pre-built wheels.
+# The wheel must be downloaded separately and installed before other packages.
+#
+# OpenCV CUDA wheel source:
+# https://github.com/cudawarped/opencv-python-cuda-wheels/releases
+#
+
+numpy==2.2.0
+pillow==11.0.0
+platformdirs==4.3.6
+pyinstaller>=6.0
+pytest==8.3.4
+scenedetect==0.6.5
+screeninfo==0.8.1
+tqdm==4.67.1
+
+# Note: Do NOT include opencv-python or opencv-contrib-python here
+# The CUDA-enabled OpenCV wheel must be installed separately before these packages
