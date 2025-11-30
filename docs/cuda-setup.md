@@ -32,9 +32,11 @@ Or run the PowerShell setup script:
 ### Step 2: Install NVIDIA Driver
 
 If not already installed, download and install the latest NVIDIA driver:
+
 - https://www.nvidia.com/drivers
 
 Verify installation:
+
 ```powershell
 nvidia-smi
 ```
@@ -42,16 +44,19 @@ nvidia-smi
 ### Step 3: Install CUDA Toolkit
 
 Download and install CUDA Toolkit from:
+
 - https://developer.nvidia.com/cuda-downloads
 
 **Recommended:** CUDA 12.x for best compatibility
 
 After installation, verify the `CUDA_PATH` environment variable is set:
+
 ```powershell
 echo $env:CUDA_PATH
 ```
 
 If not set, add it manually:
+
 ```powershell
 # For CUDA 12.4 (adjust version as needed)
 setx CUDA_PATH "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4"
@@ -69,6 +74,7 @@ The standard `opencv-python` package from PyPI does NOT include CUDA support. Yo
 2. Choose the wheel matching your Python version (e.g., `cp311` for Python 3.11)
 
 3. Uninstall existing OpenCV packages:
+
    ```powershell
    pip uninstall opencv-python opencv-python-headless opencv-contrib-python opencv-contrib-python-headless -y
    ```
@@ -81,16 +87,19 @@ The standard `opencv-python` package from PyPI does NOT include CUDA support. Yo
 #### Option B: Build from Source
 
 For advanced users who need custom configurations:
+
 - See: https://docs.opencv.org/master/d3/d52/tutorial_windows_install.html
 
 ### Step 5: Verify CUDA Support
 
 Run the diagnostics again:
+
 ```powershell
 dvr-scan --cuda-info
 ```
 
 Or verify directly with Python:
+
 ```python
 import cv2
 print("OpenCV Version:", cv2.__version__)
@@ -102,11 +111,13 @@ print("CUDA Devices:", cv2.cuda.getCudaEnabledDeviceCount())
 Once configured, use the `MOG2_CUDA` subtractor:
 
 **Command Line:**
+
 ```powershell
 dvr-scan -i video.mp4 -b MOG2_CUDA
 ```
 
 **Config File (dvr-scan.cfg):**
+
 ```ini
 [dvr-scan]
 bg-subtractor = MOG2_CUDA
@@ -134,6 +145,7 @@ Settings → Motion → Subtractor → MOG2_CUDA
 DVR-Scan automatically configures CUDA DLL paths, but if you encounter issues:
 
 1. Add CUDA bin to PATH:
+
    ```powershell
    $env:PATH += ";$env:CUDA_PATH\bin"
    ```
@@ -151,12 +163,12 @@ DVR-Scan automatically configures CUDA DLL paths, but if you encounter issues:
 
 ## Files Reference
 
-| File | Description |
-|------|-------------|
-| `dvr_scan/cuda_setup.py` | CUDA detection and setup utilities |
+| File                        | Description                           |
+| --------------------------- | ------------------------------------- |
+| `dvr_scan/cuda_setup.py`    | CUDA detection and setup utilities    |
 | `dvr_scan/opencv_loader.py` | Automatic CUDA DLL path configuration |
-| `scripts/setup_cuda.ps1` | PowerShell setup script |
-| `scripts/setup_cuda.bat` | Batch file setup script |
+| `scripts/setup_cuda.ps1`    | PowerShell setup script               |
+| `scripts/setup_cuda.bat`    | Batch file setup script               |
 
 ## Related Documentation
 
@@ -167,5 +179,6 @@ DVR-Scan automatically configures CUDA DLL paths, but if you encounter issues:
 ## Support
 
 For issues related to DVR-Scan CUDA support:
+
 - GitHub Issues: https://github.com/Breakthrough/DVR-Scan/issues
 - Discord: https://discord.gg/69kf6f2Exb

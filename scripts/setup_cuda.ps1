@@ -58,11 +58,13 @@ try {
         Write-Success "Python: $pythonVersion"
         $pythonPath = & python -c "import sys; print(sys.executable)" 2>&1
         Write-Info "Path: $pythonPath"
-    } else {
+    }
+    else {
         Write-Err "Python not found in PATH"
         Write-Info "Please install Python 3.10+ from https://python.org"
     }
-} catch {
+}
+catch {
     Write-Err "Python check failed: $_"
 }
 
@@ -71,21 +73,24 @@ Write-Header "Checking NVIDIA Driver"
 try {
     $nvidiaSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
     if ($nvidiaSmi) {
-        $driverInfo = & nvidia-smi --query-gpu=driver_version,name,compute_cap,memory.total --format=csv,noheader 2>&1
+        $driverInfo = & nvidia-smi --query-gpu=driver_version, name, compute_cap, memory.total --format=csv, noheader 2>&1
         if ($LASTEXITCODE -eq 0) {
             $parts = $driverInfo -split ", "
             Write-Success "Driver Version: $($parts[0])"
             Write-Info "GPU: $($parts[1])"
             Write-Info "Compute Capability: $($parts[2])"
             Write-Info "VRAM: $($parts[3])"
-        } else {
+        }
+        else {
             Write-Err "nvidia-smi failed: $driverInfo"
         }
-    } else {
+    }
+    else {
         Write-Warn "nvidia-smi not found - NVIDIA driver may not be installed"
         Write-Info "Download drivers from: https://www.nvidia.com/drivers"
     }
-} catch {
+}
+catch {
     Write-Err "NVIDIA driver check failed: $_"
 }
 
@@ -104,7 +109,8 @@ if ($cudaPath -and (Test-Path $cudaPath)) {
         $nvccVersion = & $nvccPath --version 2>&1 | Select-String "release"
         Write-Info "NVCC: $nvccVersion"
     }
-} else {
+}
+else {
     # Try to find CUDA automatically
     $cudaBasePaths = @(
         "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA",
@@ -125,7 +131,8 @@ if ($cudaPath -and (Test-Path $cudaPath)) {
                     [System.Environment]::SetEnvironmentVariable("CUDA_PATH", $latestCuda, [System.EnvironmentVariableTarget]::User)
                     $env:CUDA_PATH = $latestCuda
                     Write-Success "CUDA_PATH set to: $latestCuda"
-                } else {
+                }
+                else {
                     Write-Warn "CUDA_PATH not set. Run with -SetEnvironmentVariables to configure."
                     Write-Info "Or manually set: setx CUDA_PATH `"$latestCuda`""
                 }
@@ -149,7 +156,8 @@ if ($cudaPath) {
     if ($cudnnDll) {
         Write-Success "cuDNN found: $($cudnnDll.Name)"
         $cudnnFound = $true
-    } else {
+    }
+    else {
         Write-Info "cuDNN not installed (optional but recommended)"
         Write-Info "Download from: https://developer.nvidia.com/cudnn"
     }
@@ -190,7 +198,8 @@ try {
             if ($deviceCount -gt 0) {
                 Write-Success "CUDA Support: Available ($deviceCount device(s))"
                 $opencvCudaAvailable = $true
-            } else {
+            }
+            else {
                 Write-Warn "CUDA Support: Not available"
             }
         }
@@ -201,7 +210,8 @@ try {
             Write-Err $Matches[1]
         }
     }
-} catch {
+}
+catch {
     Write-Err "OpenCV check failed: $_"
 }
 
@@ -233,7 +243,8 @@ if ($InstallOpenCVCuda -and -not $opencvCudaAvailable) {
 Write-Header "DVR-Scan CUDA Status"
 try {
     & python -c "from dvr_scan.cuda_setup import print_cuda_diagnostics; print_cuda_diagnostics()" 2>&1
-} catch {
+}
+catch {
     Write-Info "Running basic DVR-Scan check..."
     & python -c "from dvr_scan.platform import HAS_MOG2_CUDA; print('MOG2_CUDA Available:', HAS_MOG2_CUDA)" 2>&1
 }
@@ -265,7 +276,8 @@ if ($ready) {
     Write-Info ""
     Write-Info "Or set in config file (dvr-scan.cfg):"
     Write-Info "  bg-subtractor = MOG2_CUDA"
-} else {
+}
+else {
     Write-Warn "CUDA is not fully configured. Required steps:"
     Write-Info ""
     foreach ($step in $steps) {
