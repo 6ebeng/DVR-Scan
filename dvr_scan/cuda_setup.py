@@ -18,10 +18,8 @@ import logging
 import os
 import platform
 import subprocess
-import sys
 import typing as ty
 from dataclasses import dataclass
-from pathlib import Path
 
 logger = logging.getLogger("dvr_scan")
 
@@ -116,10 +114,18 @@ def find_cuda_path() -> ty.Optional[str]:
         if os.path.exists(base_path):
             # Find the latest version
             try:
-                versions = [d for d in os.listdir(base_path) if os.path.isdir(os.path.join(base_path, d))]
+                versions = [
+                    d for d in os.listdir(base_path)
+                    if os.path.isdir(os.path.join(base_path, d))
+                ]
                 if versions:
                     # Sort by version number (e.g., v12.4, v12.3, v11.8)
-                    versions.sort(key=lambda x: [int(p) for p in x.lstrip('v').split('.') if p.isdigit()], reverse=True)
+                    versions.sort(
+                        key=lambda x: [
+                            int(p) for p in x.lstrip('v').split('.') if p.isdigit()
+                        ],
+                        reverse=True
+                    )
                     return os.path.join(base_path, versions[0])
             except (OSError, ValueError):
                 continue
@@ -406,7 +412,7 @@ def print_cuda_diagnostics():
     print(f"\n{'CUDA Toolkit':^60}")
     print("-" * 60)
     if info.is_installed:
-        print(f"  Status:          INSTALLED")
+        print("  Status:          INSTALLED")
         print(f"  Path:            {info.cuda_path}")
         print(f"  Version:         {info.cuda_version or 'Unknown'}")
         if info.missing_dlls:
@@ -418,7 +424,7 @@ def print_cuda_diagnostics():
     print(f"\n{'cuDNN':^60}")
     print("-" * 60)
     if info.cudnn_installed:
-        print(f"  Status:          INSTALLED")
+        print("  Status:          INSTALLED")
         print(f"  Version:         {info.cudnn_version or 'Unknown'}")
     else:
         print("  Status:          NOT INSTALLED (optional)")
@@ -429,10 +435,13 @@ def print_cuda_diagnostics():
     opencv_info = get_opencv_cuda_info()
     print(f"  OpenCV Version:  {opencv_info['opencv_version'] or 'Not installed'}")
     if opencv_info["cuda_available"]:
-        print(f"  CUDA Support:    AVAILABLE")
+        print("  CUDA Support:    AVAILABLE")
         print(f"  CUDA Devices:    {opencv_info['cuda_device_count']}")
         for dev in opencv_info["cuda_devices"]:
-            print(f"    [{dev['index']}] {dev['name']} (CC {dev['compute_capability']}, {dev['total_memory_mb']} MB)")
+            print(
+                f"    [{dev['index']}] {dev['name']} "
+                f"(CC {dev['compute_capability']}, {dev['total_memory_mb']} MB)"
+            )
     else:
         print("  CUDA Support:    NOT AVAILABLE")
         print("  Action:          Replace opencv-python with CUDA-enabled build")
