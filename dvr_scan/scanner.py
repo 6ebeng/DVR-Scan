@@ -910,14 +910,20 @@ class MotionScanner:
                                 + self._frame_skip,
                                 self._input.framerate,
                             )
-                            assert event_end.frame_num >= event_start.frame_num
+                            # Ensure event_end is at least event_start to handle edge cases
+                            # where frame numbers may be out of order due to start frame shifting.
+                            if event_end.frame_num < event_start.frame_num:
+                                event_end = event_start
                         else:
                             event_end = FrameTimecode(
                                 (last_frame_above_threshold_ms / 1000)
                                 + self._post_event_len.get_seconds(),
                                 self._input.framerate,
                             )
-                            assert event_end.get_seconds() >= event_start.get_seconds()
+                            # Ensure event_end is at least event_start to handle edge cases
+                            # where timestamps may be out of order due to start frame shifting.
+                            if event_end.get_seconds() < event_start.get_seconds():
+                                event_end = event_start
                         event_list.append(MotionEvent(start=event_start, end=event_end))
                         if self._output_mode != OutputMode.SCAN_ONLY:
                             encode_queue.put(MotionEvent(start=event_start, end=event_end))

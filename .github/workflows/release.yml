@@ -1,0 +1,358 @@
+# Build Complete Release for DVR-Scan (Fork)
+# Creates: MSI installers (x64), portable ZIP, Python wheels, and source archives
+name: Build Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.8.1)'
+        required: false
+        default: ''
+
+env:
+  ffmpeg_version: "8.0"
+  UV_SYSTEM_PYTHON: 1
+  UV_LINK_MODE: "symlink"
+
+jobs:
+  # ============================================================
+  # Build Windows x64 Portable and MSI
+  # ============================================================
+  build-windows-x64:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.5.11"
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Dependencies
+        run: |
+          uv pip install --upgrade pip build wheel virtualenv setuptools
+          uv pip install -r dist/requirements_windows.txt -r docs/requirements.txt
+
+      - name: Download FFMPEG
+        uses: dsaltares/fetch-gh-release-asset@1.1.2
+        with:
+          repo: 'GyanD/codexffmpeg'
+          version: 'tags/${{ env.ffmpeg_version }}'
+          file: 'ffmpeg-${{ env.ffmpeg_version }}-full_build.7z'
+
+      - name: Unit Test
+        run: |
+          7z e ffmpeg-${{ env.ffmpeg_version }}-full_build.7z ffmpeg.exe -r
+          python -m pytest tests/
+
+      - name: Build DVR-Scan
+        run: |
+          python dist/pre_release.py --use-local-images
+          pyinstaller dist/dvr-scan.spec
+          python dist/post_release.py
+
+      - name: Get Version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(python -c "import dvr_scan; print(dvr_scan.__version__)")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "$VERSION" > dist/dvr-scan/VERSION
+
+      - name: Assemble Distribution
+        run: |
+          7z e -odist/ffmpeg ffmpeg-${{ env.ffmpeg_version }}-full_build.7z LICENSE -r
+          Move-Item -Path ffmpeg.exe -Destination dist/dvr-scan/ffmpeg.exe
+          Move-Item -Path dist/ffmpeg/LICENSE -Destination dist/dvr-scan/LICENSE-FFMPEG -Force
+          cd dist/dvr-scan
+          7z a ../DVR-Scan-${{ steps.version.outputs.version }}-win64.zip *
+
+      - name: Upload Portable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: DVR-Scan-${{ steps.version.outputs.version }}-win64
+          path: dist/DVR-Scan-${{ steps.version.outputs.version }}-win64.zip
+
+      - name: Upload EXE files for MSI build
+        uses: actions/upload-artifact@v4
+        with:
+          name: dvr-scan-exe-x64
+          path: dist/dvr-scan/
+
+  # ============================================================
+  # Build Installer (x64) using Inno Setup
+  # ============================================================
+  build-installer-x64:
+    runs-on: windows-latest
+    needs: build-windows-x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download EXE artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dvr-scan-exe-x64
+          path: dist/dvr-scan
+
+      - name: Get Version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(cat dist/dvr-scan/VERSION)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Inno Setup Script
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          
+          $issContent = @"
+          [Setup]
+          AppName=DVR-Scan
+          AppVersion=$version
+          AppPublisher=DVR-Scan
+          AppPublisherURL=https://github.com/6ebeng/DVR-Scan
+          AppSupportURL=https://github.com/6ebeng/DVR-Scan/issues
+          DefaultDirName={autopf}\DVR-Scan
+          DefaultGroupName=DVR-Scan
+          AllowNoIcons=yes
+          OutputDir=dist
+          OutputBaseFilename=DVR-Scan-$version-win64
+          SetupIconFile=dist\installer\dvr_scan_icon.ico
+          Compression=lzma2
+          SolidCompression=yes
+          WizardStyle=modern
+          ArchitecturesInstallIn64BitMode=x64compatible
+          ArchitecturesAllowed=x64compatible
+          ChangesEnvironment=yes
+          
+          [Languages]
+          Name: "english"; MessagesFile: "compiler:Default.isl"
+          
+          [Tasks]
+          Name: "addtopath"; Description: "Add DVR-Scan to PATH"; GroupDescription: "Additional options:"
+          
+          [Files]
+          Source: "dist\dvr-scan\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+          
+          [Icons]
+          Name: "{group}\DVR-Scan"; Filename: "{app}\dvr-scan.exe"
+          Name: "{group}\DVR-Scan GUI"; Filename: "{app}\dvr-scan-app.exe"
+          Name: "{group}\{cm:UninstallProgram,DVR-Scan}"; Filename: "{uninstallexe}"
+          
+          [Registry]
+          Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NeedsAddPath('{app}')
+          
+          [Code]
+          function NeedsAddPath(Param: string): boolean;
+          var
+            OrigPath: string;
+          begin
+            if not RegQueryStringValue(HKEY_LOCAL_MACHINE,
+              'SYSTEM\CurrentControlSet\Control\Session Manager\Environment',
+              'Path', OrigPath)
+            then begin
+              Result := True;
+              exit;
+            end;
+            Result := Pos(';' + Param + ';', ';' + OrigPath + ';') = 0;
+          end;
+          "@
+          
+          $issContent | Out-File -FilePath "dvr-scan-setup.iss" -Encoding UTF8
+          Write-Host "Generated Inno Setup script"
+
+      - name: Build Installer
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" dvr-scan-setup.iss
+
+      - name: Build MSI using WiX 3
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $msiVersion = $version -replace '-.*$', ''
+          if ($msiVersion -notmatch '^\d+\.\d+\.\d+') { $msiVersion = "1.0.0" }
+          
+          # Use WiX 3 heat to harvest all files
+          $wixPath = "${env:WIX}bin"
+          
+          # Harvest all files
+          & "$wixPath\heat.exe" dir "dist\dvr-scan" -cg AllFiles -dr INSTALLFOLDER -gg -sfrag -srd -sreg -out "files.wxs"
+          
+          # Create main WiX source
+          $wxs = @"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product Id="*" Name="DVR-Scan" Language="1033" Version="$msiVersion" Manufacturer="DVR-Scan" UpgradeCode="12345678-1234-1234-1234-123456789ABC">
+              <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" Platform="x64" />
+              <MajorUpgrade DowngradeErrorMessage="A newer version of DVR-Scan is already installed." />
+              <MediaTemplate EmbedCab="yes" />
+              <Feature Id="ProductFeature" Title="DVR-Scan" Level="1">
+                <ComponentGroupRef Id="AllFiles" />
+                <ComponentRef Id="PathComponent" />
+              </Feature>
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFiles64Folder">
+                  <Directory Id="INSTALLFOLDER" Name="DVR-Scan">
+                    <Component Id="PathComponent" Guid="*" Win64="yes">
+                      <Environment Id="PATH" Name="PATH" Value="[INSTALLFOLDER]" Permanent="no" Part="last" Action="set" System="yes" />
+                    </Component>
+                  </Directory>
+                </Directory>
+              </Directory>
+            </Product>
+          </Wix>
+          "@
+          $wxs | Out-File -FilePath "product.wxs" -Encoding UTF8
+          
+          # Compile and link
+          & "$wixPath\candle.exe" -arch x64 product.wxs files.wxs -dSourceDir="dist\dvr-scan"
+          & "$wixPath\light.exe" -ext WixUIExtension product.wixobj files.wixobj -o "dist\DVR-Scan-$version-win64.msi"
+
+      - name: Upload Installer (EXE)
+        uses: actions/upload-artifact@v4
+        with:
+          name: DVR-Scan-${{ steps.version.outputs.version }}-win64-installer
+          path: dist/DVR-Scan-${{ steps.version.outputs.version }}-win64.exe
+
+      - name: Upload Installer (MSI)
+        uses: actions/upload-artifact@v4
+        with:
+          name: DVR-Scan-${{ steps.version.outputs.version }}-win64-msi
+          path: dist/DVR-Scan-${{ steps.version.outputs.version }}-win64.msi
+
+  # ============================================================
+  # Build Python Packages (wheels and source)
+  # ============================================================
+  build-python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "0.5.11"
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Dependencies
+        run: |
+          uv pip install --upgrade build wheel virtualenv
+          uv pip install opencv-python-headless opencv-contrib-python-headless --only-binary :all:
+          uv pip install -r requirements_headless.txt -r docs/requirements.txt
+
+      - name: Get Version
+        id: version
+        run: |
+          python dist/pre_release.py
+          VERSION=$(python -c "import dvr_scan; print(dvr_scan.__version__)")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build Package
+        run: |
+          python -m build
+
+      - name: Build Headless Package
+        run: |
+          python dist/tweak_setup_cfg_for_headless.py
+          python -m build
+          git reset --hard HEAD
+
+      - name: Upload Python Packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-packages
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+
+  # ============================================================
+  # Create GitHub Release
+  # ============================================================
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-windows-x64, build-installer-x64, build-python]
+    if: startsWith(github.ref, 'refs/tags/')
+
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get Version
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          VERSION=${VERSION%-release}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare Release Files
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name "*.zip" -o -name "*.exe" -o -name "*.msi" -o -name "*.whl" -o -name "*.tar.gz" \) -exec cp {} release/ \;
+          ls -la release/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: DVR-Scan v${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          draft: true
+          prerelease: false
+          files: |
+            release/*
+          body: |
+            ## Release Notes
+            
+            DVR-Scan v${{ steps.version.outputs.version }}
+            
+            ## Assets
+            
+            | File | Description |
+            |------|-------------|
+            | `DVR-Scan-*-win64.msi` | Windows x64 MSI Installer |
+            | `DVR-Scan-*-win64.exe` | Windows x64 Setup Installer |
+            | `DVR-Scan-*-win64.zip` | Windows x64 Portable |
+            | `dvr_scan-*-py3-none-any.whl` | Python Wheel |
+            | `dvr_scan_headless-*-py3-none-any.whl` | Python Wheel (Headless) |
+            | `dvr_scan-*.tar.gz` | Python Source |
+            | `dvr_scan_headless-*.tar.gz` | Python Source (Headless) |
+            
+            ## Installation
+            
+            **Windows:** Download the MSI installer, setup installer (.exe), or portable ZIP.
+            
+            **Python:** `pip install dvr-scan` or download the wheel file.
