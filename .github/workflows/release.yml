@@ -120,66 +120,8 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          
-          # Create Inno Setup script with ASCII encoding
-          $issContent = @"
-[Setup]
-AppName=DVR-Scan
-AppVersion=$version
-AppPublisher=DVR-Scan
-AppPublisherURL=https://github.com/6ebeng/DVR-Scan
-AppSupportURL=https://github.com/6ebeng/DVR-Scan/issues
-DefaultDirName={autopf}\DVR-Scan
-DefaultGroupName=DVR-Scan
-AllowNoIcons=yes
-OutputDir=dist
-OutputBaseFilename=DVR-Scan-win64-setup
-SetupIconFile=dist\installer\dvr_scan_icon.ico
-Compression=lzma2
-SolidCompression=yes
-WizardStyle=modern
-ArchitecturesInstallIn64BitMode=x64compatible
-ArchitecturesAllowed=x64compatible
-ChangesEnvironment=yes
-
-[Languages]
-Name: "english"; MessagesFile: "compiler:Default.isl"
-
-[Tasks]
-Name: "addtopath"; Description: "Add DVR-Scan to PATH"; GroupDescription: "Additional options:"; Flags: unchecked
-
-[Files]
-Source: "dist\dvr-scan\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-
-[Icons]
-Name: "{group}\DVR-Scan CLI"; Filename: "{app}\dvr-scan.exe"
-Name: "{group}\DVR-Scan GUI"; Filename: "{app}\dvr-scan-app.exe"
-Name: "{group}\Uninstall DVR-Scan"; Filename: "{uninstallexe}"
-
-[Registry]
-Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Tasks: addtopath; Check: NeedsAddPath(ExpandConstant('{app}'))
-
-[Code]
-function NeedsAddPath(Param: string): boolean;
-var
-  OrigPath: string;
-begin
-  if not RegQueryStringValue(HKEY_LOCAL_MACHINE,
-    'SYSTEM\CurrentControlSet\Control\Session Manager\Environment',
-    'Path', OrigPath)
-  then begin
-    Result := True;
-    exit;
-  end;
-  Result := Pos(';' + Param + ';', ';' + OrigPath + ';') = 0;
-end;
-"@
-          
-          [System.IO.File]::WriteAllText("dvr-scan-setup.iss", $issContent, [System.Text.Encoding]::ASCII)
-          Write-Host "Generated Inno Setup script"
-          
-          # Build installer
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" dvr-scan-setup.iss
+          # Build installer using the ISS template with version passed as define
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" "dist\installer\dvr-scan-setup.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed" }
 
       - name: Build MSI Installer (WiX 3)
@@ -203,51 +145,11 @@ end;
           }
           
           # Harvest all files with heat.exe
-          $heatArgs = @(
-            "dir", "dist\dvr-scan",
-            "-cg", "AllFiles",
-            "-dr", "INSTALLFOLDER", 
-            "-gg", "-sfrag", "-srd", "-sreg",
-            "-var", "var.SourceDir",
-            "-out", "files.wxs"
-          )
-          & "${wixBin}heat.exe" @heatArgs
+          & "${wixBin}heat.exe" dir "dist\dvr-scan" -cg AllFiles -dr INSTALLFOLDER -gg -sfrag -srd -sreg -var var.SourceDir -out "files.wxs"
           if ($LASTEXITCODE -ne 0) { throw "heat.exe failed" }
           
-          # Create main WiX source
-          $wxs = @"
-<?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="DVR-Scan" Language="1033" Version="$msiVersion" 
-           Manufacturer="DVR-Scan" UpgradeCode="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
-    <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" Platform="x64" />
-    <MajorUpgrade DowngradeErrorMessage="A newer version of DVR-Scan is already installed." />
-    <MediaTemplate EmbedCab="yes" />
-    
-    <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="DVR-Scan">
-          <Component Id="PathComponent" Guid="B2C3D4E5-F6A7-8901-BCDE-F12345678901" Win64="yes">
-            <Environment Id="PATH" Name="PATH" Value="[INSTALLFOLDER]" Permanent="no" Part="last" Action="set" System="yes" />
-          </Component>
-        </Directory>
-      </Directory>
-    </Directory>
-    
-    <Feature Id="ProductFeature" Title="DVR-Scan" Level="1">
-      <ComponentGroupRef Id="AllFiles" />
-      <ComponentRef Id="PathComponent" />
-    </Feature>
-    
-    <UIRef Id="WixUI_InstallDir" />
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
-  </Product>
-</Wix>
-"@
-          [System.IO.File]::WriteAllText("product.wxs", $wxs, [System.Text.Encoding]::UTF8)
-          
-          # Compile WiX sources
-          & "${wixBin}candle.exe" -arch x64 -dSourceDir="dist\dvr-scan" product.wxs files.wxs
+          # Compile WiX sources using template
+          & "${wixBin}candle.exe" -arch x64 -dSourceDir="dist\dvr-scan" -dProductVersion="$msiVersion" "dist\installer\product.wxs" files.wxs
           if ($LASTEXITCODE -ne 0) { throw "candle.exe failed" }
           
           # Link to create MSI
